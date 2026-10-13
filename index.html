@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Procedural City</title>
+    <meta name="description" content="Minimalist 2D top-down procedural city map generator." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%231c2127'/%3E%3Cpath d='M2 2h4v4H2zM7 2h3v3H7zM11 2h3v6h-3zM2 7h3v7H2zM6 6h4v3H6zM6 10h4v4H6zM11 9h3v5h-3z' fill='%23d3dae2'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <div id="app">
+      <aside class="panel">
+        <header class="panel-head">
+          <h1>Procedural City</h1>
+          <p>top-down map generator</p>
+        </header>
+
+        <div id="controls" class="controls"></div>
+
+        <div class="row">
+          <button id="randomize" class="primary" type="button">Randomize seed</button>
+          <button id="fit" type="button" title="Fit map to view (F)">Fit</button>
+        </div>
+
+        <section class="block">
+          <h2>City</h2>
+          <dl id="stats" class="stats"></dl>
+        </section>
+
+        <section class="block">
+          <h2>Legend</h2>
+          <ul id="legend" class="legend"></ul>
+        </section>
+
+        <footer class="panel-foot">
+          <button id="theme" type="button" title="Toggle theme (T)">Theme</button>
+          <button id="png" type="button" title="Export PNG (E)">PNG</button>
+          <button id="json" type="button" title="Export city data as JSON">JSON</button>
+        </footer>
+      </aside>
+
+      <main class="stage">
+        <canvas id="map"></canvas>
+        <p class="hint">drag to pan &middot; scroll to zoom &middot; double-click to fit</p>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
