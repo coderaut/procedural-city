@@ -13,6 +13,10 @@ It is a design tool, not a game. There is no clock: every edit recomputes immedi
 Don't add a tick loop, population drift or anything else that changes the city while
 the user is not touching it.
 
+The git remote is still called `procedural-city` — the repo began as a seed-driven map
+generator, which was scrapped wholesale for this. Don't look for that generator; only
+`world/geom.ts` and `world/rng.ts` survive from it. The app is "City Planner".
+
 ## Commands
 
 ```bash
