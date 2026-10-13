@@ -4,86 +4,123 @@ Guidance for Claude Code working in this repo.
 
 ## What this is
 
-A browser app that procedurally generates minimalist 2D top-down city maps from user
-inputs. Vite + TypeScript + Canvas 2D. **No runtime dependencies** — everything ships as
-hand-written TypeScript. Keep it that way unless there's a reason that can't be worked
-around; a geometry or noise library would replace the interesting part of this project.
+A city planning sandbox: a blank map where the user sculpts terrain, paints land use
+and draws roads, and the city grows into whatever has been zoned. Vite + TypeScript +
+Canvas 2D, **no runtime dependencies**. Keep it that way — a geometry or noise library
+would replace the part of this project that is actually interesting.
+
+It is a design tool, not a game. There is no clock: every edit recomputes immediately.
+Don't add a tick loop, population drift or anything else that changes the city while
+the user is not touching it.
 
 ## Commands
 
 ```bash
 npm run dev            # dev server with HMR
-npm run typecheck      # tsc --noEmit (strict; run this before claiming done)
+npm run typecheck      # tsc --noEmit, strict; run before claiming done
 npm run build          # typecheck + production bundle
-npm run preview:image  # regenerate docs/preview.png
+npm run preview:image  # headless render of the example map + its report
 ```
 
-There is no test runner yet. Verify generator changes by running the generator headlessly
-and looking at the output — see **Verifying a change** below.
+No test runner yet. Verify with the headless path below.
 
 ## Architecture
 
-Two halves, and the boundary matters:
+Three layers, and the boundaries matter:
 
-- `src/core/` — the generator. Pure, deterministic, **no DOM access**. Takes `CityParams`,
-  returns a `City`. Same params + same seed must always produce the identical city.
-- `src/render/` — drawing. Reads a `City`, never mutates it. Owns camera, palettes, canvas.
-- `src/ui/` + `src/main.ts` — the control panel and the wiring between the two.
+- `src/world/` — the model. Pure, deterministic, **no DOM**. Cell layers, roads,
+  growth, advisor.
+- `src/render/` — drawing. Reads the world, never mutates it. `layers.ts` is
+  deliberately DOM-free (it fills a plain RGBA buffer) so it can run headless;
+  `scene.ts` owns the canvases.
+- `src/input/` + `src/ui/` — tools, pointer handling, panels, wiring.
 
-The pipeline lives in `core/generate.ts` and runs in this order:
-layout cells → river → zoning → blocks (inset by street width) → lots → buildings.
-Each stage is its own module; add a new stage as a module rather than growing `generate.ts`.
+`World.recompute()` is the whole simulation:
+
+```
+rasterise roads -> reach distance field -> grow lots at neutral demand
+  -> analyse -> grow again under that demand -> analyse
+```
 
 ### Invariants to preserve
 
-- **Every polygon stays convex.** `geom.ts` (clip / split / inset) is exact and fast only
-  for convex input, and `subdivide.ts` relies on it. If you need concave shapes (a
-  coastline, a cul-de-sac), either clip against convex pieces or bring in real polygon
-  offsetting — don't silently feed concave polygons through `inset`.
-- **All randomness goes through `Rng`** seeded from `params.seed`. No `Math.random()` in
-  `core/` — it breaks seed reproducibility, which is the whole point of the app. (The one
-  exception is `randomSeed()`, which mints a *new* seed for the UI.)
-- **`inset()` can return `[]`** when a polygon is too small to shrink. Every caller must
-  check `poly.length < 3` before using the result.
-- **`subdivide()` is recursive with a depth cap** (`MAX_DEPTH`) and an area floor. Keep both
-  — a runaway subdivision locks the main thread.
-- Streets are not geometry. They're the *gap* left after insetting a layout cell by
-  `streetWidth / 2`, with the street colour painted underneath as `city.land`. Adding real
-  road centrelines means adding a road graph, not inflating the block polygons.
-- The renderer caches `Path2D` layers keyed on city identity (`this.layers.city !== city`),
-  so **`generateCity` must return a new object** on every regeneration. Never mutate a
-  `City` in place; the map will not redraw.
+- **Determinism.** Same layers + same roads ⇒ byte-identical city. Each lot seeds its
+  own `Rng` from `mix(seed, roadId, lotIndex)` so editing one corner never reshuffles
+  the rest. Never use `Math.random()` in `world/`, and don't make growth depend on
+  iteration order of a Map keyed by object identity.
+- **The two-pass demand loop.** Pass one runs at *neutral* demand, never at the
+  previous frame's demand — otherwise the city oscillates between recomputes. The
+  report shows the demand that **built** the city (`probeReport.demand`), not demand
+  recomputed from the finished city; the latter reads as "no housing needed" next to
+  freshly built housing.
+- **Derived layers are derived.** `grid.road`, `grid.reach` and `grid.occupancy` are
+  rebuilt by every `growCity` call. Never edit them from a tool, and never persist them.
+- **Edits go through `Edit`.** It records each cell's prior value once, so a stroke
+  lands on the undo stack as one sparse patch. A tool that writes `grid.*` directly is
+  a tool whose work cannot be undone.
+- **`inset()` can return `[]`** for a polygon too small to shrink. Check
+  `poly.length < 3` before using the result.
+- **Convex polygons only** through `geom.ts` (clip / split / inset). Lots are quads by
+  construction; keep them that way or bring in real polygon offsetting.
+- **Buildings are replaced, not mutated.** `scene.ts` caches `Path2D` per building
+  array identity, so `growCity` must return a fresh array or the map will not redraw.
+
+## Measuring things honestly
+
+"Stranded land" is distance from the nearest frontage-bearing road (`reach.ts`),
+**not** absence of a building. Counting unbuilt cells was the first implementation and
+it reported 47% stranded for a well-served city, because setbacks, verges and the gaps
+between lots are unbuilt by design. If you add another deficit measure, ask the same
+question: is this something the user can fix by drawing something?
 
 ## Code style
 
-- TypeScript strict, including `noUnusedLocals`, `exactOptionalPropertyTypes` and
+- TypeScript strict, plus `noUnusedLocals`, `exactOptionalPropertyTypes` and
   `verbatimModuleSyntax` — type-only imports need `import type`.
-- Indexed access is checked, hence the `!` on `poly[i]!` in hot geometry loops. That's
-  deliberate; don't restructure those loops to avoid it.
-- Units are metres throughout `core/`. `camera.zoom` is CSS pixels per metre.
-- Comment the *why* (a chosen weight, a visual trade-off), not the *what*. Match the
-  existing density — most functions have a one-line header at most.
-- New user inputs: add the field to `CityParams` and `DEFAULT_PARAMS` in `core/types.ts`,
-  then one entry in `FIELDS` in `ui/controls.ts`. The panel builds itself from that list.
+- Indexed access is checked, hence `!` on `arr[i]!` in hot loops. Deliberate; don't
+  restructure the loops to avoid it.
+- Units: metres everywhere in `world/`, cells only inside the grid and the layer
+  painters. `camera.zoom` is CSS pixels per metre.
+- New tool: add an entry to `TOOLS` in `input/tools.ts`. The toolbar builds itself from
+  that list. A new paint behaviour means a new op in `brush.ts`'s `OPS`.
+- New zone: add it to `ZONE` and `ZONE_RULES` in `world/kinds.ts`, a colour in
+  `render/palette.ts`, and (if it provides homes or jobs) a row in `JOBS_PER_RESIDENT`
+  in `advisor.ts`.
+- Comment the *why* — a chosen weight, a visual trade-off, a rejected approach. Match
+  the existing density.
 
 ## Verifying a change
 
-Canvas output can't be checked by typechecking, and generator bugs usually look fine in
-numbers and wrong in pixels. Two cheap checks:
+There is no browser automation here, and canvas output cannot be typechecked. Use the
+headless path, which exercises the real model and the real layer painters:
 
-1. **Numbers**: bundle `core/` with esbuild and run it in Node across layouts, seeds and
-   extremes (`size` 800 with `blockSize` 400, `size` 6000 with `blockSize` 60), asserting
-   non-zero blocks/buildings and finite coordinates.
-2. **Pixels**: `npm run preview:image` renders three cities to a PNG with no browser —
-   look at it. It reuses the real generator and palette, so a broken generator shows up.
+```bash
+npm run preview:image                                   # example map + report
+node scripts/preview.mjs out.png --crop 900,1500,560    # magnified crop, metres
+node scripts/preview.mjs out.png --load some-map.json   # a saved map
+```
 
-Budget: a 6 km city with ~10k buildings should generate in under ~100 ms. If a change
-pushes generation past a few hundred ms, the slider drag will feel bad.
+Read the printed report, not just the picture: population, jobs, stranded hectares and
+the advice list are where a broken growth or demand change shows up first. Then look at
+the PNG. Aliasing in that script's output is expected — it has no antialiasing, and the
+browser does.
+
+For model changes, bundle `world/` with esbuild and assert in Node: determinism across
+repeated recomputes, a save/load round trip, and footprint dimensions per zone. That
+round trip is how a base64 bug that silently dropped the last cell of every layer got
+caught.
+
+Budget: recompute ~45 ms on a 4 km map. Past a few hundred ms, releasing a brush stroke
+feels broken.
 
 ## Gotchas
 
-- Light theme draws dark buildings on pale streets; the night theme inverts that
-  (light buildings, dark ground). A change that only looks right in one theme isn't done.
-- `Building.shade` is **absolute** height (log-scaled storeys), not height-relative-to-zone.
-  Making it zone-relative flattens the downtown into the suburbs — it was a real bug once.
-- `renderer.ts` and `scripts/preview.mjs` each encode the draw order. Change both together.
+- `scene.ts` and `scripts/preview.mjs` each encode the draw order. Change both together.
+- A map autosaves to `localStorage` (~2 MB for 512²). Elevation is stored as decimetre
+  `Int16` to keep it under quota; don't "fix" it back to float32.
+- The demo map (`world/demo.ts`) is built only through the same brush, road and zone
+  operations the tools use. Keep it that way — it is the fixture that proves those
+  paths work.
+- Brush dabs are interpolated along the pointer path. A tool that stamps only at event
+  positions leaves a dotted line when the user drags fast, which is exactly what the
+  demo river did at first.

@@ -3,46 +3,64 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Procedural City</title>
-    <meta name="description" content="Minimalist 2D top-down procedural city map generator." />
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%231c2127'/%3E%3Cpath d='M2 2h4v4H2zM7 2h3v3H7zM11 2h3v6h-3zM2 7h3v7H2zM6 6h4v3H6zM6 10h4v4H6zM11 9h3v5h-3z' fill='%23d3dae2'/%3E%3C/svg%3E" />
+    <title>City Planner</title>
+    <meta
+      name="description"
+      content="A blank-canvas city planning sandbox: sculpt terrain, paint zones, draw roads, and watch the city fill in."
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%231b1f1a'/%3E%3Cpath d='M1 11h14v4H1z' fill='%234a7a52'/%3E%3Cpath d='M3 6h3v5H3zM7 3h3v8H7zM11 7h2v4h-2z' fill='%23d8d4c6'/%3E%3C/svg%3E"
+    />
   </head>
   <body>
     <div id="app">
-      <aside class="panel">
-        <header class="panel-head">
-          <h1>Procedural City</h1>
-          <p>top-down map generator</p>
-        </header>
-
-        <div id="controls" class="controls"></div>
-
-        <div class="row">
-          <button id="randomize" class="primary" type="button">Randomize seed</button>
-          <button id="fit" type="button" title="Fit map to view (F)">Fit</button>
+      <header class="topbar">
+        <div class="brand">
+          <strong>City Planner</strong>
+          <input id="world-name" class="name-input" type="text" value="Untitled" spellcheck="false" aria-label="Map name" />
         </div>
 
-        <section class="block">
-          <h2>City</h2>
-          <dl id="stats" class="stats"></dl>
-        </section>
+        <div class="group">
+          <button id="act-new" type="button" title="Start from a blank map">New</button>
+          <button id="act-example" type="button" title="Load a worked example map">Example</button>
+          <button id="act-save" type="button" title="Download this map as JSON">Save</button>
+          <button id="act-load" type="button" title="Open a saved map">Load</button>
+          <input id="file-input" type="file" accept="application/json,.json" hidden />
+        </div>
 
-        <section class="block">
-          <h2>Legend</h2>
-          <ul id="legend" class="legend"></ul>
-        </section>
+        <div class="group">
+          <button id="act-undo" type="button" title="Undo (Ctrl+Z)" disabled>Undo</button>
+          <button id="act-redo" type="button" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
+        </div>
 
-        <footer class="panel-foot">
-          <button id="theme" type="button" title="Toggle theme (T)">Theme</button>
-          <button id="png" type="button" title="Export PNG (E)">PNG</button>
-          <button id="json" type="button" title="Export city data as JSON">JSON</button>
-        </footer>
-      </aside>
+        <div class="group layers" role="group" aria-label="Layers">
+          <label><input type="checkbox" id="layer-terrain" checked /> Terrain</label>
+          <label><input type="checkbox" id="layer-contours" checked /> Contours</label>
+          <label><input type="checkbox" id="layer-zones" checked /> Zones</label>
+          <label><input type="checkbox" id="layer-roads" checked /> Roads</label>
+          <label><input type="checkbox" id="layer-buildings" checked /> Buildings</label>
+        </div>
+
+        <div class="group right">
+          <button id="act-fit" type="button" title="Fit map to view (F)">Fit</button>
+          <span id="zoom-readout" class="readout">100%</span>
+        </div>
+      </header>
+
+      <aside id="toolbar" class="toolbar" aria-label="Tools"></aside>
 
       <main class="stage">
         <canvas id="map"></canvas>
-        <p class="hint">drag to pan &middot; scroll to zoom &middot; double-click to fit</p>
+        <div id="cursor-readout" class="cursor-readout"></div>
       </main>
+
+      <aside id="panel" class="panel" aria-label="City report"></aside>
+
+      <footer class="statusbar">
+        <span id="status" class="status">Raise ground to begin, or load the example map.</span>
+        <span id="inspect" class="inspect"></span>
+      </footer>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

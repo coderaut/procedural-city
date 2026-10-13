@@ -1,9 +1,9 @@
 {
-  "name": "procedural-city",
+  "name": "city-planner",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Minimalist 2D top-down procedural city map generator",
+  "description": "City planning sandbox: sculpt terrain, paint zones, draw roads, and the city builds itself",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

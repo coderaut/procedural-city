@@ -1,5 +1,5 @@
-import { v } from '../core/geom';
-import type { Vec2 } from '../core/geom';
+import { v } from '../world/geom';
+import type { Vec2 } from '../world/geom';
 
 const MIN_ZOOM = 0.02;
 const MAX_ZOOM = 4;

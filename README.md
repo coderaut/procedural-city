@@ -1,14 +1,14 @@
-# Procedural City
+# City Planner
 
-A minimalist 2D top-down city map generator. You set the dials — seed, street plan,
-extent, block size, density, green space, irregularity, river — and it draws a whole
-city: street grid, blocks, lots, buildings, parks, waterfront and bridges.
+A city planning sandbox that starts with nothing. You sculpt the land, paint the
+water and the woods, designate districts with a brush or a pen tool, and draw the
+roads yourself. The city builds itself into whatever you have zoned — and tells you
+what it is short of.
 
-Everything is generated in the browser from a seed. No assets, no map data, no runtime
-dependencies — the generator is a few hundred lines of plain TypeScript and the map is
-drawn straight to a `<canvas>`.
+![a planned coastal city, zoned and built](docs/preview.png)
 
-![three street plans: grid, radial, organic](docs/preview.png)
+Nothing is generated for you. There is no seed to roll, no layout to pick. A new map
+is flat, empty ground.
 
 ## Quick start
 
@@ -18,84 +18,105 @@ npm run dev      # http://localhost:5173
 ```
 
 ```bash
-npm run build    # typecheck + production bundle into dist/
-npm run preview  # serve the built bundle
+npm run build          # typecheck + production bundle
 npm run typecheck
+npm run preview:image  # render docs/preview.png without a browser
 ```
 
-## Using it
+## How you use it
 
-| Input | What it changes |
+**1. Shape the world.** Raise and lower ground, smooth it, flatten it. Paint sea,
+lakes and rivers; elevation shades by height with contour lines, and the sea darkens
+with depth. Plant forest, and drop ore, fertile soil, stone and oil.
+
+**2. Designate districts.** Pick residential, commercial, office, industrial, park,
+civic or farmland and paint it on — freehand with the **Brush**, or click out a shape
+with the **Pen** and press Enter to fill it. Regions can be any shape at all.
+
+**3. Draw the roads.** Streets, avenues and highways, dragged on by hand. Hold Shift
+for a straight run. Ends snap to nearby roads so junctions connect.
+
+**4. Watch it fill in, and read what it needs.** Lots lay themselves out along every
+road frontage inside your zones, sized and stacked by the demand the city is under.
+The panel on the right reports population, jobs, demand per zone, and a list of what
+to fix — stranded land with no road into it, workers with no jobs, jobs with no
+housing, districts with no parks, buildings in the flood zone.
+
+Everything recomputes the moment you let go of the mouse. There is no clock to wait on.
+
+### Controls
+
+| | |
 | --- | --- |
-| **Seed** | Any text. The same seed and settings always rebuild the identical city. |
-| **Street plan** | `Grid` (jittered Manhattan), `Radial` (rings and spokes around a plaza), `Organic` (recursive irregular partition, old-town feel). |
-| **Extent** | Map edge length, 0.8–6 km. |
-| **Block size** | Target city-block edge, 60–400 m. |
-| **Street width** | Street corridor width, 6–44 m. Blocks are the land left after streets are carved out. |
-| **Density** | Drives lot size, building setbacks and storey counts. |
-| **Green space** | Share of blocks turned into parks. |
-| **Irregularity** | 0 is ruler-straight, 1 is wonky — jitters street spacing and every subdivision cut. |
-| **River / width** | Carves a river across the map, clears the blocks it runs through and throws 2–4 bridges across it. |
+| Paint / draw | Left drag |
+| Pan | Middle drag, right drag, or Space + drag |
+| Zoom | Scroll wheel |
+| Fit map | `F` |
+| Brush / Pen mode | `B` / `P` |
+| Brush size | `[` and `]` |
+| Fill pen region | `Enter`, or double-click |
+| Cancel | `Esc` |
+| Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
 
-Drag to pan, scroll to zoom, double-click to fit. `R` new seed, `F` fit, `T` toggle
-light/night theme, `E` export PNG. **PNG** exports a 2048px map; **JSON** exports the
-city as data (zones, block polygons, building footprints and storeys).
+Maps save to a JSON file and reload from one. Work in progress is kept in the browser
+between sessions.
 
-Building fill darkness tracks storeys on an absolute scale, so the downtown core reads
-darker and denser than the suburbs on the same map.
+## Why roads matter
 
-## How a city gets built
+Buildings only appear where a road can reach them. Lots are laid along each frontage
+to a depth set by the zone — 34 m for housing, 70 m for industry — so zoning a huge
+block and running one street past it gets you a built edge and a hollow middle. The
+panel measures that properly, as distance from the nearest usable street rather than
+bare ground, and tells you how many hectares are stranded.
 
-The generator is a pure pipeline in `src/core/` — same params in, same city out, no
-rendering concerns:
+Highways carry traffic but take no frontage: feed them with streets. Avenues grow
+taller buildings than streets do.
 
-1. **Layout** (`layout.ts`) covers the land with convex cells. Grid lays down two sets
-   of jittered parallel streets; radial builds rings whose spoke count doubles outward
-   so blocks stay a similar width; organic recursively splits the whole plot.
-2. **Water** (`water.ts`) traces a river by midpoint displacement between two map edges,
-   thickens it into a band, and picks bridge crossings.
-3. **Zoning** (`zoning.ts`) weights downtown / commercial / residential / industrial /
-   park by distance from the centre, then rolls one per cell.
-4. **Blocks** (`generate.ts`) drops cells the river runs through and insets the rest by
-   half the street width — the gap *is* the street.
-5. **Lots** (`lots.ts`) subdivides each block until the pieces hit a zone-specific target
-   area, then insets each lot by its setback to get a building footprint and assigns
-   storeys from a zone-skewed distribution.
+Terrain constrains it too. Each zone has a maximum slope it will build on, so a
+zoned hillside stays empty until you smooth it. Industry sitting on an ore deposit
+produces 40% more, farmland on fertile soil likewise.
 
-Blocks stay convex the whole way through, which keeps the three geometry operations in
-`geom.ts` — clip, split, inset — exact and fast. A 6 km city with ~10,000 buildings
-generates in well under 100 ms.
-
-`src/render/` then draws it: the renderer caches one set of `Path2D` layers per city and
-batches buildings into shade buckets, so panning and zooming never rebuild geometry.
-
-## Project layout
+## Architecture
 
 ```
 src/
-  core/        generator — pure, deterministic, no DOM
-    geom.ts        convex polygon maths (clip, split, inset, centroid)
-    rng.ts         seeded PRNG (mulberry32)
-    subdivide.ts   recursive polygon halving, shared by districts and lots
-    layout.ts      grid / radial / organic street plans
-    water.ts       river + bridges
-    zoning.ts      zone weights by distance from centre
-    lots.ts        lots, setbacks, storeys
-    generate.ts    the pipeline
-    types.ts       CityParams, City, Block, Building, defaults
-  render/      canvas drawing — reads a City, never mutates it
-    camera.ts      pan / zoom / fit
-    palette.ts     paper + night themes
-    renderer.ts    Path2D layer cache, PNG export
-  ui/          control panel and stylesheet
-  main.ts      wiring: params -> generate -> draw
+  world/      the model. Pure, deterministic, no DOM.
+    grid.ts       cell layers: height, water, forest, resource, zone (+ derived road, reach, occupancy)
+    kinds.ts      the vocabularies and the per-zone rules (lot size, setback, storeys, slope limits)
+    brush.ts      brush and polygon stamping, with per-tool value rules
+    edit.ts       sparse undoable edits, and the history stack
+    roads.ts      road graph: simplify, snap, rasterise, frontage sampling
+    reach.ts      chamfer distance transform from roads — how "stranded" is measured
+    growth.ts     lays lots along frontages and places buildings
+    advisor.ts    demand model and the advice list
+    world.ts      recompute pipeline, save/load
+    demo.ts       the Example map, built only through the tools' own operations
+    geom.ts rng.ts codec.ts
+  render/
+    layers.ts     pure RGBA painters for terrain and zones (no DOM — runs headless too)
+    scene.ts      composites bitmaps + roads + buildings under the camera
+    camera.ts palette.ts
+  input/
+    tools.ts      the tool catalogue
+    editor.ts     pointer input to world edits
+  ui/           toolbar, report panel, stylesheet
+  main.ts       wiring
 ```
+
+`World.recompute()` is the whole simulation, and it runs twice: once at neutral
+demand to learn what the city can support, then again under the demand that implies.
+Both passes are deterministic — each lot seeds its own RNG from its road id and
+position — so editing one corner of the map never reshuffles the rest.
+
+On a 4 km map with ~1,300 buildings, a recompute takes about 45 ms and a brush stroke
+repaints its own rectangle in well under a millisecond.
 
 ## Roadmap
 
-- Named districts and street labels
-- Coastline and lake water bodies, not just a river
-- Highways and rail corridors that cut across the plan
-- Terrain: elevation that bends streets and keeps towers off slopes
-- Paint-in zones instead of distance-based zoning
-- SVG export
+- Water that flows: rivers that follow the terrain downhill instead of being painted
+- Utilities — power and water networks as another thing the advisor can miss
+- Traffic on the road graph, and congestion as a growth constraint
+- Named districts, street names, and labels on the map
+- Bridges and tunnels as explicit structures
+- Rail, ports and airports
+- Bigger worlds through chunked recompute

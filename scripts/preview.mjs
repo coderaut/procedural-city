@@ -1,100 +1,145 @@
 /**
- * Renders the README preview (three street plans, side by side) without a browser.
+ * Renders a map to PNG without a browser, and prints the planner's report.
  *
- *   node scripts/preview.mjs docs/preview.png
+ *   node scripts/preview.mjs docs/preview.png          # the example map
+ *   node scripts/preview.mjs out.png --load map.json   # a saved map
  *
- * It bundles the real generator and palette with esbuild, then rasterises the result
- * with a scanline polygon fill and writes a PNG by hand. The draw order mirrors
- * src/render/renderer.ts — if you change the renderer's layering, change it here too.
+ * It bundles the real world model and the real layer painters with esbuild, so
+ * terrain shading, zone tints, growth and the advisor are all exercised — only
+ * the canvas compositing in src/render/scene.ts is reimplemented here (as a
+ * scanline fill). If the draw order in scene.ts changes, change it here too.
  */
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { deflateSync } from 'node:zlib';
 import { build } from 'esbuild';
 
-const PANEL = 520;
-const GAP = 10;
-const W = PANEL * 3 + GAP * 2;
-const H = PANEL;
-const BACKDROP = '#f7f6f2';
-
 const out = process.argv[2] ?? 'docs/preview.png';
+const loadIndex = process.argv.indexOf('--load');
+const cropIndex = process.argv.indexOf('--crop');
+/** --crop x,y,size (metres) renders just that square, magnified. */
+const crop = cropIndex > 0 ? process.argv[cropIndex + 1].split(',').map(Number) : null;
+const SCALE = crop ? 8 : 2; // output pixels per cell
 
 const work = mkdtempSync(join(tmpdir(), 'city-preview-'));
 await build({
-  entryPoints: ['src/core/generate.ts', 'src/core/types.ts', 'src/render/palette.ts'],
+  entryPoints: [
+    'src/world/demo.ts',
+    'src/world/world.ts',
+    'src/world/roads.ts',
+    'src/render/layers.ts',
+    'src/render/palette.ts',
+  ],
   outdir: work,
   bundle: true,
   format: 'esm',
   logLevel: 'warning',
 });
 
-const { generateCity } = await import(pathToFileURL(join(work, 'core/generate.js')));
-const { DEFAULT_PARAMS } = await import(pathToFileURL(join(work, 'core/types.js')));
-const { PALETTES, blockColor, buildingColor } = await import(pathToFileURL(join(work, 'render/palette.js')));
+const load = (rel) => import(pathToFileURL(join(work, rel)));
+const { buildDemoWorld } = await load('world/demo.js');
+const { World } = await load('world/world.js');
+const { roadOutline } = await load('world/roads.js');
 
-const PANELS = [
-  { ...DEFAULT_PARAMS, seed: 'ASTORIA', layout: 'grid' },
-  { ...DEFAULT_PARAMS, seed: 'HALDEN', layout: 'radial' },
-  { ...DEFAULT_PARAMS, seed: 'VERONA', layout: 'organic', irregularity: 0.7 },
-];
+const { paintTerrain, paintZones, DEFAULT_TERRAIN_OPTIONS, DEFAULT_ZONE_OPTIONS } = await load('render/layers.js');
+const { PALETTE, buildingCss } = await load('render/palette.js');
 
-const palette = PALETTES.light;
+const world =
+  loadIndex > 0
+    ? World.fromJSON(JSON.parse(readFileSync(process.argv[loadIndex + 1], 'utf8')))
+    : buildDemoWorld();
+
+const grid = world.grid;
+const originX = crop ? crop[0] : 0;
+const originY = crop ? crop[1] : 0;
+const spanCells = crop ? Math.round(crop[2] / grid.cellSize) : grid.size;
+const W = spanCells * SCALE;
+const H = W;
+
+/* ---- cell layers --------------------------------------------------------- */
+
+const terrain = new Uint8ClampedArray(grid.cells * 4);
+paintTerrain(grid, terrain, DEFAULT_TERRAIN_OPTIONS);
+
+const zones = new Uint8ClampedArray(grid.cells * 4);
+paintZones(grid, zones, DEFAULT_ZONE_OPTIONS);
+
 const pixels = Buffer.alloc(W * H * 3);
-paint(pixels, rgb(BACKDROP));
-
-PANELS.forEach((params, index) => {
-  const city = generateCity(params);
-  const scale = PANEL / city.size;
-  const ox = index * (PANEL + GAP);
-
-  fill(pixels, city.land, rgb(palette.street), scale, ox);
-  for (const block of city.blocks) fill(pixels, block.poly, rgb(blockColor(palette, block.zone)), scale, ox);
-  for (const block of city.blocks) {
-    for (const b of block.buildings) {
-      fill(pixels, b.poly, rgb(buildingColor(palette, b.zone, b.shade)), scale, ox);
+const cellOffsetX = Math.floor(originX / grid.cellSize);
+const cellOffsetY = Math.floor(originY / grid.cellSize);
+for (let y = 0; y < H; y++) {
+  const cy = Math.min(grid.size - 1, cellOffsetY + Math.floor(y / SCALE));
+  for (let x = 0; x < W; x++) {
+    const cx = Math.min(grid.size - 1, cellOffsetX + Math.floor(x / SCALE));
+    const src = (cy * grid.size + cx) * 4;
+    const zoneAlpha = zones[src + 3] / 255;
+    const o = (y * W + x) * 3;
+    for (let c = 0; c < 3; c++) {
+      const base = terrain[src + c];
+      pixels[o + c] = zoneAlpha > 0 ? base + (zones[src + c] - base) * zoneAlpha : base;
     }
   }
-  if (city.riverPoly) fill(pixels, city.riverPoly, rgb(palette.water), scale, ox);
-  for (const deck of city.bridges) fill(pixels, deck, rgb(palette.street), scale, ox);
+}
 
-  console.log(`${params.layout.padEnd(8)} blocks=${city.blocks.length} buildings=${city.stats.buildings}`);
-});
+/* ---- vector layers ------------------------------------------------------- */
+
+const mToPx = SCALE / grid.cellSize;
+
+for (const segment of world.roads.segments) {
+  fill(polyToPx(roadOutline(segment, 1.5)), [70, 68, 60]);
+}
+for (const segment of world.roads.segments) {
+  fill(polyToPx(roadOutline(segment, 0)), rgb(PALETTE.roadFill[segment.cls]));
+}
+for (const b of world.buildings) {
+  fill(polyToPx(b.poly), rgb(buildingCss(b.shade)));
+}
 
 writeFileSync(out, encodePng(pixels));
+
+/* ---- report -------------------------------------------------------------- */
+
+const r = world.report;
+console.log(`map        ${world.name}  ${(grid.metres / 1000).toFixed(2)} km square, ${grid.size}x${grid.size} cells`);
+console.log(`roads      ${world.roads.segments.length} segments, ${r.roadKm.toFixed(2)} km`);
+console.log(`buildings  ${r.buildings}`);
+console.log(`population ${r.population.toLocaleString()}   jobs ${r.jobs.toLocaleString()}`);
+console.log(`unemployed ${r.unemployed}   unfilled jobs ${r.unfilledJobs}`);
+console.log(`stranded   ${r.strandedHa.toFixed(1)} ha   unusable ${r.unusableHa.toFixed(1)} ha   flood risk ${r.floodRisk}`);
+console.log(
+  `demand     ${Object.entries(r.demand)
+    .filter(([, value]) => value > 0)
+    .map(([zone, value]) => `${zone}:${value.toFixed(2)}`)
+    .join(' ')}`,
+);
+for (const advisory of r.advisories) {
+  console.log(`  [${advisory.level}] ${advisory.title} — ${advisory.detail}`);
+}
 console.log(`wrote ${out} (${W}x${H})`);
 
 /* -------------------------------------------------------------------------- */
 
-function paint(buf, [r, g, b]) {
-  for (let i = 0; i < W * H; i++) {
-    buf[i * 3] = r;
-    buf[i * 3 + 1] = g;
-    buf[i * 3 + 2] = b;
-  }
+function polyToPx(poly) {
+  return poly.map((p) => [(p.x - originX) * mToPx, (p.y - originY) * mToPx]);
 }
 
-function rgb(color) {
-  if (color.startsWith('#')) {
-    const hex = color.slice(1);
+function rgb(colour) {
+  if (Array.isArray(colour)) return colour;
+  if (colour.startsWith('#')) {
+    const hex = colour.slice(1);
     const full = hex.length === 3 ? [...hex].map((c) => c + c).join('') : hex;
-    return [
-      parseInt(full.slice(0, 2), 16),
-      parseInt(full.slice(2, 4), 16),
-      parseInt(full.slice(4, 6), 16),
-    ];
+    return [parseInt(full.slice(0, 2), 16), parseInt(full.slice(2, 4), 16), parseInt(full.slice(4, 6), 16)];
   }
-  const m = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
-  if (!m) throw new Error(`Unsupported colour: ${color}`);
+  const m = colour.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (!m) throw new Error(`Unsupported colour: ${colour}`);
   return [Number(m[1]), Number(m[2]), Number(m[3])];
 }
 
-/** Even-odd scanline fill, clipped to this panel's column. */
-function fill(buf, poly, [r, g, b], scale, ox) {
-  if (poly.length < 3) return;
-  const pts = poly.map((p) => [p.x * scale + ox, p.y * scale]);
+/** Even-odd scanline polygon fill into the RGB buffer. */
+function fill(pts, [r, g, b]) {
+  if (pts.length < 3) return;
   let minY = Infinity;
   let maxY = -Infinity;
   for (const [, y] of pts) {
@@ -115,13 +160,13 @@ function fill(buf, poly, [r, g, b], scale, ox) {
     }
     crossings.sort((m, n) => m - n);
     for (let k = 0; k + 1 < crossings.length; k += 2) {
-      const xa = Math.max(ox, Math.ceil(crossings[k]));
-      const xb = Math.min(ox + PANEL - 1, Math.floor(crossings[k + 1]));
+      const xa = Math.max(0, Math.ceil(crossings[k]));
+      const xb = Math.min(W - 1, Math.floor(crossings[k + 1]));
       for (let x = xa; x <= xb; x++) {
         const o = (y * W + x) * 3;
-        buf[o] = r;
-        buf[o + 1] = g;
-        buf[o + 2] = b;
+        pixels[o] = r;
+        pixels[o + 1] = g;
+        pixels[o + 2] = b;
       }
     }
   }
@@ -131,7 +176,7 @@ function encodePng(buf) {
   const stride = W * 3 + 1;
   const raw = Buffer.alloc(stride * H);
   for (let y = 0; y < H; y++) {
-    raw[y * stride] = 0; // filter: none
+    raw[y * stride] = 0;
     buf.copy(raw, y * stride + 1, y * W * 3, (y + 1) * W * 3);
   }
 
@@ -157,8 +202,8 @@ function encodePng(buf) {
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(W, 0);
   ihdr.writeUInt32BE(H, 4);
-  ihdr[8] = 8; // bit depth
-  ihdr[9] = 2; // truecolour RGB
+  ihdr[8] = 8;
+  ihdr[9] = 2;
 
   return Buffer.concat([
     Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
@@ -167,3 +212,4 @@ function encodePng(buf) {
     chunk('IEND', Buffer.alloc(0)),
   ]);
 }
+
